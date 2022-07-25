@@ -74,6 +74,7 @@ use super::{
     sys::{UnsafeCommandBuffer, UnsafeCommandBufferBuilder},
     CommandBufferExecError,
 };
+use crate::range_map::RangeMap;
 use crate::{
     buffer::{sys::UnsafeBuffer, BufferAccess},
     device::{Device, DeviceOwned, Queue},
@@ -83,7 +84,6 @@ use crate::{
     },
     DeviceSize,
 };
-use rangemap::RangeMap;
 use std::{borrow::Cow, collections::HashMap, ops::Range, sync::Arc};
 
 mod builder;
@@ -582,10 +582,11 @@ mod tests {
             // Two secondary command buffers that both write to the buffer
             let secondary = (0..2)
                 .map(|_| {
-                    let mut builder = AutoCommandBufferBuilder::secondary_compute(
+                    let mut builder = AutoCommandBufferBuilder::secondary(
                         device.clone(),
                         queue.family(),
                         CommandBufferUsage::SimultaneousUse,
+                        Default::default(),
                     )
                     .unwrap();
                     builder

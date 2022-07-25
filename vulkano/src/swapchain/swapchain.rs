@@ -392,8 +392,10 @@ impl<W> Swapchain<W> {
         }
 
         // VUID-VkSwapchainCreateInfoKHR-imageExtent-01689
-        // Shouldn't be possible with a properly behaving device
-        assert!(image_extent[0] != 0 || image_extent[1] != 0);
+        // On some platforms, dimensions of zero-length can occur by minimizing the surface.
+        if image_extent.contains(&0) {
+            return Err(SwapchainCreationError::ImageExtentZeroLengthDimensions);
+        }
 
         // VUID-VkSwapchainCreateInfoKHR-imageArrayLayers-01275
         if image_array_layers == 0
@@ -575,10 +577,11 @@ impl<W> Swapchain<W> {
             create_info.p_next = surface_full_screen_exclusive_win32_info as *const _ as *const _;
         }
 
+        let fns = device.fns();
+
         let handle = {
-            let fns = device.fns();
             let mut output = MaybeUninit::uninit();
-            check_errors(fns.khr_swapchain.create_swapchain_khr(
+            check_errors((fns.khr_swapchain.create_swapchain_khr)(
                 device.internal_object(),
                 &create_info,
                 ptr::null(),
@@ -587,25 +590,27 @@ impl<W> Swapchain<W> {
             output.assume_init()
         };
 
-        let image_handles = {
-            let fns = device.fns();
-            let mut num = 0;
-            check_errors(fns.khr_swapchain.get_swapchain_images_khr(
+        let image_handles = loop {
+            let mut count = 0;
+            check_errors((fns.khr_swapchain.get_swapchain_images_khr)(
                 device.internal_object(),
                 handle,
-                &mut num,
+                &mut count,
                 ptr::null_mut(),
             ))?;
 
-            let mut images = Vec::with_capacity(num as usize);
-            check_errors(fns.khr_swapchain.get_swapchain_images_khr(
+            let mut images = Vec::with_capacity(count as usize);
+            let result = check_errors((fns.khr_swapchain.get_swapchain_images_khr)(
                 device.internal_object(),
                 handle,
-                &mut num,
+                &mut count,
                 images.as_mut_ptr(),
             ))?;
-            images.set_len(num as usize);
-            images
+
+            if !matches!(result, Success::Incomplete) {
+                images.set_len(count as usize);
+                break images;
+            }
         };
 
         Ok((handle, image_handles))
@@ -770,15 +775,13 @@ impl<W> Swapchain<W> {
         }
 
         unsafe {
-            check_errors(
-                self.device
-                    .fns()
-                    .ext_full_screen_exclusive
-                    .acquire_full_screen_exclusive_mode_ext(
-                        self.device.internal_object(),
-                        self.handle,
-                    ),
-            )?;
+            let fns = self.device.fns();
+            check_errors((fns
+                .ext_full_screen_exclusive
+                .acquire_full_screen_exclusive_mode_ext)(
+                self.device.internal_object(),
+                self.handle,
+            ))?;
         }
 
         Ok(())
@@ -801,15 +804,13 @@ impl<W> Swapchain<W> {
         }
 
         unsafe {
-            check_errors(
-                self.device
-                    .fns()
-                    .ext_full_screen_exclusive
-                    .release_full_screen_exclusive_mode_ext(
-                        self.device.internal_object(),
-                        self.handle,
-                    ),
-            )?;
+            let fns = self.device.fns();
+            check_errors((fns
+                .ext_full_screen_exclusive
+                .release_full_screen_exclusive_mode_ext)(
+                self.device.internal_object(),
+                self.handle,
+            ))?;
         }
 
         Ok(())
@@ -853,7 +854,7 @@ impl<W> Drop for Swapchain<W> {
     fn drop(&mut self) {
         unsafe {
             let fns = self.device.fns();
-            fns.khr_swapchain.destroy_swapchain_khr(
+            (fns.khr_swapchain.destroy_swapchain_khr)(
                 self.device.internal_object(),
                 self.handle,
                 ptr::null(),
@@ -1056,6 +1057,14 @@ pub enum SwapchainCreationError {
         max_supported: [u32; 2],
     },
 
+    /// The provided `image_extent` contained at least one dimension of zero length.
+    /// This is prohibited by [VUID-VkSwapchainCreateInfoKHR-imageExtent-01689](https://khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkSwapchainCreateInfoKHR.html#VUID-VkSwapchainCreateInfoKHR-imageExtent-01689)
+    /// which requires both the width and height be non-zero.
+    ///
+    /// This error is distinct from `ImageExtentNotSupported` because a surface's minimum supported
+    /// length may not enforce this rule.
+    ImageExtentZeroLengthDimensions,
+
     /// The provided image parameters are not supported as queried from `image_format_properties`.
     ImageFormatPropertiesNotSupported,
 
@@ -1139,8 +1148,12 @@ impl fmt::Display for SwapchainCreationError {
             ),
             Self::ImageExtentNotSupported { provided, min_supported, max_supported } => write!(
                 fmt,
-                "the provided `min_image_count` ({:?}) is not within the range (min: {:?}, max: {:?}) supported by the surface for this device",
+                "the provided `image_extent` ({:?}) is not within the range (min: {:?}, max: {:?}) supported by the surface for this device",
                 provided, min_supported, max_supported,
+            ),
+            Self::ImageExtentZeroLengthDimensions => write!(
+                fmt,
+                "the provided `image_extent` contained at least one dimension of zero length",
             ),
             Self::ImageFormatPropertiesNotSupported => write!(
                 fmt,
@@ -1804,6 +1817,7 @@ where
             // If `flushed` already contains `true`, then `build_submission` will return `Empty`.
 
             let build_submission_result = self.build_submission();
+            self.flushed.store(true, Ordering::SeqCst);
 
             if let &Err(FlushError::FullScreenExclusiveLost) = &build_submission_result {
                 self.swapchain
@@ -1827,7 +1841,6 @@ where
                 _ => unreachable!(),
             }
 
-            self.flushed.store(true, Ordering::SeqCst);
             Ok(())
         }
     }
@@ -1905,18 +1918,16 @@ where
 {
     fn drop(&mut self) {
         unsafe {
+            if !*self.flushed.get_mut() {
+                // Flushing may fail, that's okay. We will still wait for the queue later, so any
+                // previous futures that were flushed correctly will still be waited upon.
+                self.flush().ok();
+            }
+
             if !*self.finished.get_mut() {
-                match self.flush() {
-                    Ok(()) => {
-                        // Block until the queue finished.
-                        self.queue().unwrap().wait().unwrap();
-                        self.previous.signal_finished();
-                    }
-                    Err(_) => {
-                        // In case of error we simply do nothing, as there's nothing to do
-                        // anyway.
-                    }
-                }
+                // Block until the queue finished.
+                self.queue().unwrap().wait().unwrap();
+                self.previous.signal_finished();
             }
         }
     }
@@ -1952,20 +1963,18 @@ pub unsafe fn acquire_next_image_raw<W>(
     };
 
     let mut out = MaybeUninit::uninit();
-    let r = check_errors(
-        fns.khr_swapchain.acquire_next_image_khr(
-            swapchain.device.internal_object(),
-            swapchain.handle,
-            timeout_ns,
-            semaphore
-                .map(|s| s.internal_object())
-                .unwrap_or(ash::vk::Semaphore::null()),
-            fence
-                .map(|f| f.internal_object())
-                .unwrap_or(ash::vk::Fence::null()),
-            out.as_mut_ptr(),
-        ),
-    )?;
+    let r = check_errors((fns.khr_swapchain.acquire_next_image_khr)(
+        swapchain.device.internal_object(),
+        swapchain.handle,
+        timeout_ns,
+        semaphore
+            .map(|s| s.internal_object())
+            .unwrap_or(ash::vk::Semaphore::null()),
+        fence
+            .map(|f| f.internal_object())
+            .unwrap_or(ash::vk::Fence::null()),
+        out.as_mut_ptr(),
+    ))?;
 
     let out = out.assume_init();
     let (id, suboptimal) = match r {

@@ -38,7 +38,7 @@ pub struct Fence {
     // If true, we know that the `Fence` is signaled. If false, we don't know.
     // This variable exists so that we don't need to call `vkGetFenceStatus` or `vkWaitForFences`
     // multiple times.
-    signaled: AtomicBool,
+    is_signaled: AtomicBool,
 
     // Indicates whether this fence was taken from the fence pool.
     // If true, will be put back into fence pool on drop.
@@ -64,7 +64,7 @@ impl Fence {
         let handle = unsafe {
             let fns = device.fns();
             let mut output = MaybeUninit::uninit();
-            check_errors(fns.v1_0.create_fence(
+            check_errors((fns.v1_0.create_fence)(
                 device.internal_object(),
                 &create_info,
                 ptr::null(),
@@ -76,7 +76,7 @@ impl Fence {
         Ok(Fence {
             handle,
             device,
-            signaled: AtomicBool::new(signaled),
+            is_signaled: AtomicBool::new(signaled),
             must_put_in_pool: false,
         })
     }
@@ -94,13 +94,17 @@ impl Fence {
                 unsafe {
                     // Make sure the fence isn't signaled
                     let fns = device.fns();
-                    check_errors(fns.v1_0.reset_fences(device.internal_object(), 1, &handle))?;
+                    check_errors((fns.v1_0.reset_fences)(
+                        device.internal_object(),
+                        1,
+                        &handle,
+                    ))?;
                 }
 
                 Fence {
                     handle,
                     device,
-                    signaled: AtomicBool::new(false),
+                    is_signaled: AtomicBool::new(false),
                     must_put_in_pool: true,
                 }
             }
@@ -117,20 +121,20 @@ impl Fence {
 
     /// Returns true if the fence is signaled.
     #[inline]
-    pub fn ready(&self) -> Result<bool, OomError> {
+    pub fn is_signaled(&self) -> Result<bool, OomError> {
         unsafe {
-            if self.signaled.load(Ordering::Relaxed) {
+            if self.is_signaled.load(Ordering::Relaxed) {
                 return Ok(true);
             }
 
             let fns = self.device.fns();
-            let result = check_errors(
-                fns.v1_0
-                    .get_fence_status(self.device.internal_object(), self.handle),
-            )?;
+            let result = check_errors((fns.v1_0.get_fence_status)(
+                self.device.internal_object(),
+                self.handle,
+            ))?;
             match result {
                 Success::Success => {
-                    self.signaled.store(true, Ordering::Relaxed);
+                    self.is_signaled.store(true, Ordering::Relaxed);
                     Ok(true)
                 }
                 Success::NotReady => Ok(false),
@@ -146,7 +150,7 @@ impl Fence {
     /// If you pass a duration of 0, then the function will return without blocking.
     pub fn wait(&self, timeout: Option<Duration>) -> Result<(), FenceWaitError> {
         unsafe {
-            if self.signaled.load(Ordering::Relaxed) {
+            if self.is_signaled.load(Ordering::Relaxed) {
                 return Ok(());
             }
 
@@ -160,7 +164,7 @@ impl Fence {
             };
 
             let fns = self.device.fns();
-            let r = check_errors(fns.v1_0.wait_for_fences(
+            let r = check_errors((fns.v1_0.wait_for_fences)(
                 self.device.internal_object(),
                 1,
                 &self.handle,
@@ -170,7 +174,7 @@ impl Fence {
 
             match r {
                 Success::Success => {
-                    self.signaled.store(true, Ordering::Relaxed);
+                    self.is_signaled.store(true, Ordering::Relaxed);
                     Ok(())
                 }
                 Success::Timeout => Err(FenceWaitError::Timeout),
@@ -203,7 +207,7 @@ impl Fence {
                     ),
                 };
 
-                if fence.signaled.load(Ordering::Relaxed) {
+                if fence.is_signaled.load(Ordering::Relaxed) {
                     None
                 } else {
                     Some(fence.handle)
@@ -223,7 +227,7 @@ impl Fence {
         let r = if let Some(device) = device {
             unsafe {
                 let fns = device.fns();
-                check_errors(fns.v1_0.wait_for_fences(
+                check_errors((fns.v1_0.wait_for_fences)(
                     device.internal_object(),
                     fences.len() as u32,
                     fences.as_ptr(),
@@ -249,11 +253,12 @@ impl Fence {
     pub fn reset(&mut self) -> Result<(), OomError> {
         unsafe {
             let fns = self.device.fns();
-            check_errors(
-                fns.v1_0
-                    .reset_fences(self.device.internal_object(), 1, &self.handle),
-            )?;
-            self.signaled.store(false, Ordering::Relaxed);
+            check_errors((fns.v1_0.reset_fences)(
+                self.device.internal_object(),
+                1,
+                &self.handle,
+            ))?;
+            self.is_signaled.store(false, Ordering::Relaxed);
             Ok(())
         }
     }
@@ -283,7 +288,7 @@ impl Fence {
                     ),
                 };
 
-                fence.signaled.store(false, Ordering::Relaxed);
+                fence.is_signaled.store(false, Ordering::Relaxed);
                 fence.handle
             })
             .collect();
@@ -291,7 +296,7 @@ impl Fence {
         if let Some(device) = device {
             unsafe {
                 let fns = device.fns();
-                check_errors(fns.v1_0.reset_fences(
+                check_errors((fns.v1_0.reset_fences)(
                     device.internal_object(),
                     fences.len() as u32,
                     fences.as_ptr(),
@@ -311,8 +316,7 @@ impl Drop for Fence {
                 self.device.fence_pool().lock().unwrap().push(raw_fence);
             } else {
                 let fns = self.device.fns();
-                fns.v1_0
-                    .destroy_fence(self.device.internal_object(), self.handle, ptr::null());
+                (fns.v1_0.destroy_fence)(self.device.internal_object(), self.handle, ptr::null());
             }
         }
     }
@@ -434,7 +438,7 @@ mod tests {
         let (device, _) = gfx_dev_and_queue!();
 
         let fence = Fence::new(device.clone(), Default::default()).unwrap();
-        assert!(!fence.ready().unwrap());
+        assert!(!fence.is_signaled().unwrap());
     }
 
     #[test]
@@ -449,7 +453,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(fence.ready().unwrap());
+        assert!(fence.is_signaled().unwrap());
     }
 
     #[test]
@@ -480,7 +484,7 @@ mod tests {
         )
         .unwrap();
         fence.reset().unwrap();
-        assert!(!fence.ready().unwrap());
+        assert!(!fence.is_signaled().unwrap());
     }
 
     #[test]

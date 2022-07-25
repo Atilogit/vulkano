@@ -28,6 +28,7 @@ use super::{
     cpu_access::{ReadLockError, WriteLockError},
     BufferUsage,
 };
+use crate::range_map::RangeMap;
 use crate::{
     check_errors,
     device::{Device, DeviceOwned},
@@ -37,7 +38,6 @@ use crate::{
 };
 use ash::vk::Handle;
 use parking_lot::{Mutex, MutexGuard};
-use rangemap::RangeMap;
 use smallvec::SmallVec;
 use std::{
     error, fmt,
@@ -160,7 +160,7 @@ impl UnsafeBuffer {
         let handle = unsafe {
             let fns = device.fns();
             let mut output = MaybeUninit::uninit();
-            check_errors(fns.v1_0.create_buffer(
+            check_errors((fns.v1_0.create_buffer)(
                 device.internal_object(),
                 &create_info.build(),
                 ptr::null(),
@@ -218,21 +218,21 @@ impl UnsafeBuffer {
                     .khr_get_memory_requirements2
             {
                 if self.device.api_version() >= Version::V1_1 {
-                    fns.v1_1.get_buffer_memory_requirements2(
+                    (fns.v1_1.get_buffer_memory_requirements2)(
                         self.device.internal_object(),
                         &buffer_memory_requirements_info2,
                         &mut memory_requirements2,
                     );
                 } else {
-                    fns.khr_get_memory_requirements2
-                        .get_buffer_memory_requirements2_khr(
-                            self.device.internal_object(),
-                            &buffer_memory_requirements_info2,
-                            &mut memory_requirements2,
-                        );
+                    (fns.khr_get_memory_requirements2
+                        .get_buffer_memory_requirements2_khr)(
+                        self.device.internal_object(),
+                        &buffer_memory_requirements_info2,
+                        &mut memory_requirements2,
+                    );
                 }
             } else {
-                fns.v1_0.get_buffer_memory_requirements(
+                (fns.v1_0.get_buffer_memory_requirements)(
                     self.device.internal_object(),
                     self.handle,
                     &mut memory_requirements2.memory_requirements,
@@ -286,7 +286,7 @@ impl UnsafeBuffer {
         // We check for correctness in debug mode.
         debug_assert!({
             let mut mem_reqs = MaybeUninit::uninit();
-            fns.v1_0.get_buffer_memory_requirements(
+            (fns.v1_0.get_buffer_memory_requirements)(
                 self.device.internal_object(),
                 self.handle,
                 mem_reqs.as_mut_ptr(),
@@ -312,7 +312,7 @@ impl UnsafeBuffer {
             }
         }
 
-        check_errors(fns.v1_0.bind_buffer_memory(
+        check_errors((fns.v1_0.bind_buffer_memory)(
             self.device.internal_object(),
             self.handle,
             memory.internal_object(),
@@ -349,8 +349,7 @@ impl Drop for UnsafeBuffer {
     fn drop(&mut self) {
         unsafe {
             let fns = self.device.fns();
-            fns.v1_0
-                .destroy_buffer(self.device.internal_object(), self.handle, ptr::null());
+            (fns.v1_0.destroy_buffer)(self.device.internal_object(), self.handle, ptr::null());
         }
     }
 }
@@ -507,11 +506,22 @@ impl From<Error> for BufferCreationError {
 }
 
 /// The level of sparse binding that a buffer should be created with.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct SparseLevel {
     pub sparse_residency: bool,
     pub sparse_aliased: bool,
     pub _ne: crate::NonExhaustive,
+}
+
+impl Default for SparseLevel {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            sparse_residency: false,
+            sparse_aliased: false,
+            _ne: crate::NonExhaustive(()),
+        }
+    }
 }
 
 impl SparseLevel {

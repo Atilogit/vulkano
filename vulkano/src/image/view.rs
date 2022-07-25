@@ -525,7 +525,7 @@ where
         let handle = {
             let fns = image_inner.device().fns();
             let mut output = MaybeUninit::uninit();
-            check_errors(fns.v1_0.create_image_view(
+            check_errors((fns.v1_0.create_image_view)(
                 image_inner.device().internal_object(),
                 &create_info,
                 ptr::null(),
@@ -561,8 +561,7 @@ where
         unsafe {
             let device = self.device();
             let fns = device.fns();
-            fns.v1_0
-                .destroy_image_view(device.internal_object(), self.handle, ptr::null());
+            (fns.v1_0.destroy_image_view)(device.internal_object(), self.handle, ptr::null());
         }
     }
 }
@@ -702,7 +701,7 @@ impl ImageViewCreateInfo {
 }
 
 /// Error that can happen when creating an image view.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageViewCreationError {
     /// Allocating memory failed.
     OomError(OomError),
@@ -984,6 +983,34 @@ pub unsafe trait ImageViewAbstract:
 
     /// Returns the component mapping of this view.
     fn component_mapping(&self) -> ComponentMapping;
+
+    /// Returns the dimensions of this view.
+    fn dimensions(&self) -> ImageDimensions {
+        let subresource_range = self.subresource_range();
+        let array_layers =
+            subresource_range.array_layers.end - subresource_range.array_layers.start;
+
+        match self.image().dimensions() {
+            ImageDimensions::Dim1d { width, .. } => ImageDimensions::Dim1d {
+                width,
+                array_layers,
+            },
+            ImageDimensions::Dim2d { width, height, .. } => ImageDimensions::Dim2d {
+                width,
+                height,
+                array_layers,
+            },
+            ImageDimensions::Dim3d {
+                width,
+                height,
+                depth,
+            } => ImageDimensions::Dim3d {
+                width,
+                height,
+                depth,
+            },
+        }
+    }
 
     /// Returns whether the image view supports sampling with a
     /// [`Cubic`](crate::sampler::Filter::Cubic) `mag_filter` or `min_filter`.

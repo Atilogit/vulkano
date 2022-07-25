@@ -180,7 +180,7 @@ impl Device {
         create_info: DeviceCreateInfo,
     ) -> Result<(Arc<Device>, impl ExactSizeIterator<Item = Arc<Queue>>), DeviceCreationError> {
         let DeviceCreateInfo {
-            enabled_extensions,
+            mut enabled_extensions,
             mut enabled_features,
             queue_create_infos,
             _ne: _,
@@ -254,6 +254,11 @@ impl Device {
 
         active_queue_families.sort_unstable();
         active_queue_families.dedup();
+        let supported_extensions = physical_device.supported_extensions();
+
+        if supported_extensions.khr_portability_subset {
+            enabled_extensions.khr_portability_subset = true;
+        }
 
         /*
             Extensions
@@ -263,7 +268,7 @@ impl Device {
         // VUID-VkDeviceCreateInfo-ppEnabledExtensionNames-03328
         // VUID-VkDeviceCreateInfo-pProperties-04451
         enabled_extensions.check_requirements(
-            physical_device.supported_extensions(),
+            supported_extensions,
             api_version,
             instance.enabled_extensions(),
         )?;
@@ -378,7 +383,7 @@ impl Device {
 
         let handle = unsafe {
             let mut output = MaybeUninit::uninit();
-            check_errors(fns_i.v1_0.create_device(
+            check_errors((fns_i.v1_0.create_device)(
                 physical_device.internal_object(),
                 &create_info,
                 ptr::null(),
@@ -389,7 +394,7 @@ impl Device {
 
         // loading the function pointers of the newly-created device
         let fns = DeviceFunctions::load(|name| unsafe {
-            mem::transmute(fns_i.v1_0.get_device_proc_addr(handle, name.as_ptr()))
+            mem::transmute((fns_i.v1_0.get_device_proc_addr)(handle, name.as_ptr()))
         });
 
         let device = Arc::new(Device {
@@ -416,11 +421,9 @@ impl Device {
             queues_to_get
                 .into_iter()
                 .map(move |QueueToGet { family, id }| unsafe {
+                    let fns = device.fns();
                     let mut output = MaybeUninit::uninit();
-                    device
-                        .fns()
-                        .v1_0
-                        .get_device_queue(handle, family, id, output.as_mut_ptr());
+                    (fns.v1_0.get_device_queue)(handle, family, id, output.as_mut_ptr());
 
                     Arc::new(Queue {
                         handle: Mutex::new(output.assume_init()),
@@ -462,7 +465,8 @@ impl Device {
     /// while this function is waiting.
     ///
     pub unsafe fn wait(&self) -> Result<(), OomError> {
-        check_errors(self.fns.v1_0.device_wait_idle(self.handle))?;
+        let fns = self.fns();
+        check_errors((fns.v1_0.device_wait_idle)(self.handle))?;
         Ok(())
     }
 
@@ -615,7 +619,7 @@ impl Device {
             let mut memory_fd_properties = ash::vk::MemoryFdPropertiesKHR::default();
 
             let fns = self.fns();
-            check_errors(fns.khr_external_memory_fd.get_memory_fd_properties_khr(
+            check_errors((fns.khr_external_memory_fd.get_memory_fd_properties_khr)(
                 self.handle,
                 handle_type.into(),
                 file.into_raw_fd(),
@@ -651,10 +655,10 @@ impl Device {
 
         unsafe {
             let fns = self.instance.fns();
-            check_errors(
-                fns.ext_debug_utils
-                    .set_debug_utils_object_name_ext(self.handle, &info),
-            )?;
+            check_errors((fns.ext_debug_utils.set_debug_utils_object_name_ext)(
+                self.handle,
+                &info,
+            ))?;
         }
 
         Ok(())
@@ -664,23 +668,19 @@ impl Device {
 impl Drop for Device {
     #[inline]
     fn drop(&mut self) {
+        let fns = self.fns();
+
         unsafe {
             for &raw_fence in self.fence_pool.lock().unwrap().iter() {
-                self.fns
-                    .v1_0
-                    .destroy_fence(self.handle, raw_fence, ptr::null());
+                (fns.v1_0.destroy_fence)(self.handle, raw_fence, ptr::null());
             }
             for &raw_sem in self.semaphore_pool.lock().unwrap().iter() {
-                self.fns
-                    .v1_0
-                    .destroy_semaphore(self.handle, raw_sem, ptr::null());
+                (fns.v1_0.destroy_semaphore)(self.handle, raw_sem, ptr::null());
             }
             for &raw_event in self.event_pool.lock().unwrap().iter() {
-                self.fns
-                    .v1_0
-                    .destroy_event(self.handle, raw_event, ptr::null());
+                (fns.v1_0.destroy_event)(self.handle, raw_event, ptr::null());
             }
-            self.fns.v1_0.destroy_device(self.handle, ptr::null());
+            (fns.v1_0.destroy_device)(self.handle, ptr::null());
         }
     }
 }
@@ -995,7 +995,7 @@ impl Queue {
         unsafe {
             let fns = self.device.fns();
             let handle = self.handle.lock().unwrap();
-            check_errors(fns.v1_0.queue_wait_idle(*handle))?;
+            check_errors((fns.v1_0.queue_wait_idle)(*handle))?;
             Ok(())
         }
     }
@@ -1027,8 +1027,7 @@ impl Queue {
         unsafe {
             let fns = self.device.instance().fns();
             let handle = self.handle.lock().unwrap();
-            fns.ext_debug_utils
-                .queue_begin_debug_utils_label_ext(*handle, &label_info);
+            (fns.ext_debug_utils.queue_begin_debug_utils_label_ext)(*handle, &label_info);
         }
 
         Ok(())
@@ -1069,7 +1068,7 @@ impl Queue {
         {
             let fns = self.device.instance().fns();
             let handle = self.handle.lock().unwrap();
-            fns.ext_debug_utils.queue_end_debug_utils_label_ext(*handle);
+            (fns.ext_debug_utils.queue_end_debug_utils_label_ext)(*handle);
         }
 
         Ok(())
@@ -1121,8 +1120,7 @@ impl Queue {
         unsafe {
             let fns = self.device.instance().fns();
             let handle = self.handle.lock().unwrap();
-            fns.ext_debug_utils
-                .queue_insert_debug_utils_label_ext(*handle, &label_info);
+            (fns.ext_debug_utils.queue_insert_debug_utils_label_ext)(*handle, &label_info);
         }
 
         Ok(())

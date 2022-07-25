@@ -277,12 +277,13 @@ impl Instance {
         let InstanceCreateInfo {
             application_name,
             application_version,
-            enabled_extensions,
+            mut enabled_extensions,
             enabled_layers,
             engine_name,
             engine_version,
             function_pointers,
             max_api_version,
+            enumerate_portability,
             _ne: _,
         } = create_info;
 
@@ -307,12 +308,17 @@ impl Instance {
 
         // VUID-VkApplicationInfo-apiVersion-04010
         assert!(max_api_version >= Version::V1_0);
+        let supported_extensions =
+            InstanceExtensions::supported_by_core_with_loader(&function_pointers)?;
+        let mut flags = ash::vk::InstanceCreateFlags::empty();
+
+        if enumerate_portability && supported_extensions.khr_portability_enumeration {
+            enabled_extensions.khr_portability_enumeration = true;
+            flags |= ash::vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+        }
 
         // Check if the extensions are correct
-        enabled_extensions.check_requirements(
-            &InstanceExtensions::supported_by_core_with_loader(&function_pointers)?,
-            api_version,
-        )?;
+        enabled_extensions.check_requirements(&supported_extensions, api_version)?;
 
         // FIXME: check whether each layer is supported
         let enabled_layers_cstr: Vec<CString> = enabled_layers
@@ -350,7 +356,7 @@ impl Instance {
         };
 
         let mut create_info = ash::vk::InstanceCreateInfo {
-            flags: ash::vk::InstanceCreateFlags::empty(),
+            flags,
             p_application_info: &application_info,
             enabled_layer_count: enabled_layers_ptrs.len() as u32,
             pp_enabled_layer_names: enabled_layers_ptrs.as_ptr(),
@@ -417,10 +423,11 @@ impl Instance {
         let handle = {
             let mut output = MaybeUninit::uninit();
             let fns = function_pointers.fns();
-            check_errors(
-                fns.v1_0
-                    .create_instance(&create_info, ptr::null(), output.as_mut_ptr()),
-            )?;
+            check_errors((fns.v1_0.create_instance)(
+                &create_info,
+                ptr::null(),
+                output.as_mut_ptr(),
+            ))?;
             output.assume_init()
         };
 
@@ -488,8 +495,10 @@ impl Instance {
 impl Drop for Instance {
     #[inline]
     fn drop(&mut self) {
+        let fns = self.fns();
+
         unsafe {
-            self.fns.v1_0.destroy_instance(self.handle, ptr::null());
+            (fns.v1_0.destroy_instance)(self.handle, ptr::null());
         }
     }
 }
@@ -592,6 +601,21 @@ pub struct InstanceCreateInfo {
     /// supported instance version is 1.0, then it will be 1.0.
     pub max_api_version: Option<Version>,
 
+    /// Enumerate devices that support `VK_KHR_portability_subset`.
+    ///
+    /// With this enabled, devices that use non-conformant vulkan implementations can be enumerated.
+    /// (ex. MoltenVK)
+    ///
+    /// The default value is false.
+    ///
+    /// # Notes
+    ///
+    /// - If `true` and `khr_portability_enumeration` extension is not preset this field will be ignored
+    ///   and the `ENUMERATE_PORTABILITY_KHR` flag will not be set.
+    /// - If `true` and `khr_portability_enumeration` extension is present, `khr_portability_enumeration`
+    ///   extension will automatically be enabled.
+    pub enumerate_portability: bool,
+
     pub _ne: crate::NonExhaustive,
 }
 
@@ -607,6 +631,7 @@ impl Default for InstanceCreateInfo {
             engine_version: Version::major_minor(0, 0),
             function_pointers: None,
             max_api_version: None,
+            enumerate_portability: false,
             _ne: crate::NonExhaustive(()),
         }
     }

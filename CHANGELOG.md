@@ -6,6 +6,9 @@
     description. They will be transferred to this file right after the
     Pull Request merge. 
 -->
+
+# Version 0.30.0 (2022-07-20)
+
 - **Breaking** Removed the `try_gpu_lock`, `increase_gpu_lock` and `unlock` methods from the `BufferAccess` and `ImageAccess` traits. Locking is now implemented internally in `UnsafeBuffer` and `UnsafeImage`.
 - **Breaking** All `check_buffer_access` and `check_image_access` functions now take an `UnsafeBuffer`/`UnsafeImage` and a `Range<DeviceSize>`.
 - **Breaking** `UnsafeCommandBufferBuilder::pipeline_barrier` now takes a `DependencyInfo`. It will use `vkCmdPipelineBarrier2` if supported.
@@ -23,6 +26,13 @@
 - **Breaking** `ClearRect` now has a single `Range<u32>` for array layers.
 - **Breaking** The fields of `ClearAttachment::Color` are now named.
 - **Breaking** The `ImageClearValue` trait is removed.
+- **Breaking** The various `AutoCommandBufferBuilder` constructors for secondary command buffers have been merged into one `secondary` function, which directly takes a `CommandBufferInheritanceInfo` value.
+- **Breaking** The `render_pass` values of `GraphicsPipelineBuilder` and `CommandBufferInheritanceInfo` have both been changed into an enum that selects between rendering with `begin_render_pass` and rendering with `begin_rendering`. They implement `Into` for easy conversion.
+- **Breaking** Added the missing `rasterization_samples` field to `MultisampleState`, which must be provided when doing multisampled rendering.
+- **Breaking** Renamed the `ready` method of `Fence` to `is_signaled`.
+- **Breaking** The `set_depth_bounds` parameter is now a single `RangeInclusive` instead of two separate `f32`, to match the type used on the `DepthBoundsState` struct.
+- **Breaking** Removed `DeviceExtensions::required_extensions()`. Required extensions such as `khr_portability_subset` are now enabled automatically when available.
+- **Breaking** Removed `PhysicalDevice::required_extensions()`
 - `UnsafeCommandPoolCreateInfo` and `UnsafeCommandPoolCreationError` interfaces exposed.
 - Fixed compile error in Vulkano-win on Android.
 - Added `COVERAGE.md`, a document detailing how much of Vulkan is currently covered by Vulkano.
@@ -33,6 +43,21 @@
 - Added the `resolve_image` command buffer command.
 - `BufferViewAbstract` now has a `range` method that returns the byte range of the underlying buffer that the view covers.
 - Added new enum value `CheckDispatchError::ZeroLengthDimensions` to be returned when `dispatch()` is called with dimension(s) of length zero.
+- Vulkano-shaders now supports `raygen`, `anyhit`, `closesthit`, `miss`, `intersection` and `callable` shaders.
+- Fix PresentFuture flushing twice if `then_swapchain_present` fails.
+- Added new enum value `SwapchainCreationError::ImageExtentZeroLengthDimensions` to be returned when at least one of the image extent's dimensions are zero.
+- Added support for dynamic rendering, and a `triangle-v1_3` example demonstrating how it's used.
+- Fixed a bug where `NonExhaustive` implemented the `Default` trait and was therefore still constructable by the user.
+- Updated ash to 0.37.0+1.3.209.
+- Fixed bug in various Vulkan calls where the returned data might be incomplete.
+- Fixed bug that triggered an assert if a render pass had an attachment with `Undefined` initial layout.
+- Added an `is_signaled` method to `FenceSignalFuture`.
+- Add a simple `general_purpose_image_view` method to `StorageImage` for less verbose image view creation for e.g. intermediary render targets.
+- Add a `vulkano_util` crate to help reduce boilerplate in many use cases. `VulkanoContext` to hold access to device & instances, `VulkanoWindows` to organize windows and their renderers. `VulkanoRenderer` to hold the window and methods to `acquire` (swapchain) and `present` between which you are intended to execute your pipelines.
+- Add option to change `PresentMode` at runtime in `vulkano_util` with `set_present_mode`
+- Made `ImageUsage` constructor functions `const`.
+- Added `intersection` and `max_count` methods to `SampleCounts`, as well as a `BitAnd` implementation.
+- `InstanceCreateInfo` now has `enumerate_portability` field.
 
 # Version 0.29.0 (2022-03-11)
 

@@ -19,8 +19,7 @@ use vulkano::{
     },
     image::{view::ImageView, ImageUsage, SwapchainImage},
     instance::{Instance, InstanceCreateInfo},
-    pipeline::{graphics::viewport::ViewportState, GraphicsPipeline},
-    render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
+    render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     swapchain::{
         acquire_next_image, AcquireError, Swapchain, SwapchainCreateInfo, SwapchainCreationError,
     },
@@ -40,6 +39,8 @@ fn main() {
     let required_extensions = vulkano_win::required_extensions();
     let instance = Instance::new(InstanceCreateInfo {
         enabled_extensions: required_extensions,
+        // Enable enumerating devices that use non-conformant vulkan implementations. (ex. MoltenVK)
+        enumerate_portability: true,
         ..Default::default()
     })
     .unwrap();
@@ -78,9 +79,7 @@ fn main() {
     let (device, mut queues) = Device::new(
         physical_device,
         DeviceCreateInfo {
-            enabled_extensions: physical_device
-                .required_extensions()
-                .union(&device_extensions),
+            enabled_extensions: device_extensions,
             queue_create_infos: vec![QueueCreateInfo::family(queue_family)],
             ..Default::default()
         },
@@ -118,37 +117,6 @@ fn main() {
         .unwrap()
     };
 
-    mod vs {
-        vulkano_shaders::shader! {
-            ty: "vertex",
-            src: "
-    			#version 450
-
-
-    			void main() {
-    			}
-    		"
-        }
-    }
-
-    mod fs {
-        vulkano_shaders::shader! {
-            ty: "fragment",
-            src: "
-    			#version 450
-
-    			layout(location = 0) out vec4 f_color;
-
-    			void main() {
-    				f_color = vec4(1.0, 0.0, 0.0, 1.0);
-    			}
-    		"
-        }
-    }
-
-    let vs = vs::load(device.clone()).unwrap();
-    let fs = fs::load(device.clone()).unwrap();
-
     let render_pass = vulkano::single_pass_renderpass!(device.clone(),
         attachments: {
             color: {
@@ -164,15 +132,6 @@ fn main() {
         }
     )
     .unwrap();
-
-    let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
-    let pipeline = GraphicsPipeline::start()
-        .vertex_shader(vs.entry_point("main").unwrap(), ())
-        .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-        .fragment_shader(fs.entry_point("main").unwrap(), ())
-        .render_pass(subpass)
-        .build(device.clone())
-        .unwrap();
 
     let mut width = swapchain.image_extent()[0];
     let mut height = swapchain.image_extent()[1];
@@ -195,11 +154,16 @@ fn main() {
             recreate_swapchain = true;
         }
         Event::RedrawEventsCleared => {
+            let dimensions = surface.window().inner_size();
+            if dimensions.width == 0 || dimensions.height == 0 {
+                return;
+            }
+
             previous_frame_end.as_mut().unwrap().cleanup_finished();
 
             if recreate_swapchain {
                 let (new_swapchain, new_images) = match swapchain.recreate(SwapchainCreateInfo {
-                    image_extent: surface.window().inner_size().into(),
+                    image_extent: dimensions.into(),
                     ..swapchain.create_info()
                 }) {
                     Ok(r) => r,
@@ -243,7 +207,6 @@ fn main() {
                     SubpassContents::Inline,
                 )
                 .unwrap()
-                .bind_pipeline_graphics(pipeline.clone())
                 // Clear attachments with clear values and rects information, all the rects will be cleared by the same value
                 // Note that the ClearRect offsets and extents are not affected by the viewport,
                 // they are directly applied to the rendering image

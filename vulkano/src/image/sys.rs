@@ -18,6 +18,8 @@ use super::{
     ImageSubresourceLayers, ImageSubresourceRange, ImageTiling, ImageUsage, SampleCount,
     SampleCounts,
 };
+use crate::image::view::ImageViewCreationError;
+use crate::range_map::RangeMap;
 use crate::{
     buffer::cpu_access::{ReadLockError, WriteLockError},
     check_errors,
@@ -33,7 +35,6 @@ use crate::{
 };
 use ash::vk::Handle;
 use parking_lot::{Mutex, MutexGuard};
-use rangemap::RangeMap;
 use smallvec::{smallvec, SmallVec};
 use std::{
     error, fmt,
@@ -821,7 +822,7 @@ impl UnsafeImage {
         let handle = {
             let fns = device.fns();
             let mut output = MaybeUninit::uninit();
-            check_errors(fns.v1_0.create_image(
+            check_errors((fns.v1_0.create_image)(
                 device.internal_object(),
                 &create_info.build(),
                 ptr::null(),
@@ -931,21 +932,21 @@ impl UnsafeImage {
                     .khr_get_memory_requirements2
             {
                 if self.device.api_version() >= Version::V1_1 {
-                    fns.v1_1.get_image_memory_requirements2(
+                    (fns.v1_1.get_image_memory_requirements2)(
                         self.device.internal_object(),
                         &image_memory_requirements_info2,
                         &mut memory_requirements2,
                     );
                 } else {
-                    fns.khr_get_memory_requirements2
-                        .get_image_memory_requirements2_khr(
-                            self.device.internal_object(),
-                            &image_memory_requirements_info2,
-                            &mut memory_requirements2,
-                        );
+                    (fns.khr_get_memory_requirements2
+                        .get_image_memory_requirements2_khr)(
+                        self.device.internal_object(),
+                        &image_memory_requirements_info2,
+                        &mut memory_requirements2,
+                    );
                 }
             } else {
-                fns.v1_0.get_image_memory_requirements(
+                (fns.v1_0.get_image_memory_requirements)(
                     self.device.internal_object(),
                     self.handle,
                     &mut memory_requirements2.memory_requirements,
@@ -970,7 +971,7 @@ impl UnsafeImage {
         // We check for correctness in debug mode.
         debug_assert!({
             let mut mem_reqs = MaybeUninit::uninit();
-            fns.v1_0.get_image_memory_requirements(
+            (fns.v1_0.get_image_memory_requirements)(
                 self.device.internal_object(),
                 self.handle,
                 mem_reqs.as_mut_ptr(),
@@ -982,7 +983,7 @@ impl UnsafeImage {
                 && mem_reqs.memory_type_bits & (1 << memory.memory_type().id()) != 0
         });
 
-        check_errors(fns.v1_0.bind_image_memory(
+        check_errors((fns.v1_0.bind_image_memory)(
             self.device.internal_object(),
             self.handle,
             memory.internal_object(),
@@ -1311,7 +1312,7 @@ impl UnsafeImage {
         };
 
         let mut out = MaybeUninit::uninit();
-        fns.v1_0.get_image_subresource_layout(
+        (fns.v1_0.get_image_subresource_layout)(
             self.device.internal_object(),
             self.handle,
             &subresource,
@@ -1338,8 +1339,7 @@ impl Drop for UnsafeImage {
 
         unsafe {
             let fns = self.device.fns();
-            fns.v1_0
-                .destroy_image(self.device.internal_object(), self.handle, ptr::null());
+            (fns.v1_0.destroy_image)(self.device.internal_object(), self.handle, ptr::null());
         }
     }
 }
@@ -1533,7 +1533,9 @@ pub enum ImageCreationError {
     FormatNotSupported,
 
     /// A requested usage flag was not supported by the given format.
-    FormatUsageNotSupported { usage: &'static str },
+    FormatUsageNotSupported {
+        usage: &'static str,
+    },
 
     /// The image configuration as queried through the `image_format_properties` function was not
     /// supported by the device.
@@ -1541,18 +1543,30 @@ pub enum ImageCreationError {
 
     /// The number of array layers exceeds the maximum supported by the device for this image
     /// configuration.
-    MaxArrayLayersExceeded { array_layers: u32, max: u32 },
+    MaxArrayLayersExceeded {
+        array_layers: u32,
+        max: u32,
+    },
 
     /// The specified dimensions exceed the maximum supported by the device for this image
     /// configuration.
-    MaxDimensionsExceeded { extent: [u32; 3], max: [u32; 3] },
+    MaxDimensionsExceeded {
+        extent: [u32; 3],
+        max: [u32; 3],
+    },
 
     /// The usage included one of the attachment types, and the specified width and height exceeded
     /// the `max_framebuffer_width` or `max_framebuffer_height` limits.
-    MaxFramebufferDimensionsExceeded { extent: [u32; 2], max: [u32; 2] },
+    MaxFramebufferDimensionsExceeded {
+        extent: [u32; 2],
+        max: [u32; 2],
+    },
 
     /// The maximum number of mip levels for the given dimensions has been exceeded.
-    MaxMipLevelsExceeded { mip_levels: u32, max: u32 },
+    MaxMipLevelsExceeded {
+        mip_levels: u32,
+        max: u32,
+    },
 
     /// Multisampling was enabled, and the `cube_compatible` flag was set.
     MultisampleCubeCompatible,
@@ -1574,7 +1588,9 @@ pub enum ImageCreationError {
 
     /// The sharing mode was set to `Concurrent`, but one of the specified queue family ids was not
     /// valid.
-    SharingInvalidQueueFamilyId { id: u32 },
+    SharingInvalidQueueFamilyId {
+        id: u32,
+    },
 
     /// A YCbCr format was given, but the specified width and/or height was not a multiple of 2
     /// as required by the format's chroma subsampling.
@@ -1588,6 +1604,8 @@ pub enum ImageCreationError {
 
     /// A YCbCr format was given, but the image type was not 2D.
     YcbcrFormatNot2d,
+
+    DirectImageViewCreationFailed(ImageViewCreationError),
 }
 
 impl error::Error for ImageCreationError {
@@ -1720,6 +1738,9 @@ impl fmt::Display for ImageCreationError {
                     fmt,
                     "a YCbCr format was given, but the image type was not 2D"
                 )
+            }
+            Self::DirectImageViewCreationFailed(e) => {
+                write!(fmt, "Image view creation failed {}", e.to_string())
             }
         }
     }

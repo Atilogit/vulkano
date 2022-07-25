@@ -29,6 +29,7 @@ use crate::{
     pipeline::{
         graphics::{
             input_assembly::PrimitiveTopology,
+            render_pass::PipelineRenderPassType,
             vertex_input::{VertexInputRate, VertexInputState},
         },
         ComputePipeline, DynamicState, GraphicsPipeline, PartialStateMode, Pipeline,
@@ -1515,7 +1516,12 @@ fn check_vertex_buffers(
             }
         }
 
-        if pipeline.subpass().render_pass().views_used() != 0 {
+        let view_mask = match pipeline.render_pass() {
+            PipelineRenderPassType::BeginRenderPass(subpass) => subpass.render_pass().views_used(),
+            PipelineRenderPassType::BeginRendering(rendering_info) => rendering_info.view_mask,
+        };
+
+        if view_mask != 0 {
             let max_instance_index = pipeline
                 .device()
                 .physical_device()
@@ -2233,7 +2239,7 @@ impl UnsafeCommandBufferBuilder {
         });
 
         let fns = self.device.fns();
-        fns.v1_0.cmd_dispatch(
+        (fns.v1_0.cmd_dispatch)(
             self.handle,
             group_counts[0],
             group_counts[1],
@@ -2251,8 +2257,7 @@ impl UnsafeCommandBufferBuilder {
         debug_assert!(inner.buffer.usage().indirect_buffer);
         debug_assert_eq!(inner.offset % 4, 0);
 
-        fns.v1_0
-            .cmd_dispatch_indirect(self.handle, inner.buffer.internal_object(), inner.offset);
+        (fns.v1_0.cmd_dispatch_indirect)(self.handle, inner.buffer.internal_object(), inner.offset);
     }
 
     /// Calls `vkCmdDraw` on the builder.
@@ -2265,7 +2270,7 @@ impl UnsafeCommandBufferBuilder {
         first_instance: u32,
     ) {
         let fns = self.device.fns();
-        fns.v1_0.cmd_draw(
+        (fns.v1_0.cmd_draw)(
             self.handle,
             vertex_count,
             instance_count,
@@ -2285,7 +2290,7 @@ impl UnsafeCommandBufferBuilder {
         first_instance: u32,
     ) {
         let fns = self.device.fns();
-        fns.v1_0.cmd_draw_indexed(
+        (fns.v1_0.cmd_draw_indexed)(
             self.handle,
             index_count,
             instance_count,
@@ -2315,7 +2320,7 @@ impl UnsafeCommandBufferBuilder {
         debug_assert!(inner.offset < inner.buffer.size());
         debug_assert!(inner.buffer.usage().indirect_buffer);
 
-        fns.v1_0.cmd_draw_indirect(
+        (fns.v1_0.cmd_draw_indirect)(
             self.handle,
             inner.buffer.internal_object(),
             inner.offset,
@@ -2338,7 +2343,7 @@ impl UnsafeCommandBufferBuilder {
         debug_assert!(inner.offset < inner.buffer.size());
         debug_assert!(inner.buffer.usage().indirect_buffer);
 
-        fns.v1_0.cmd_draw_indexed_indirect(
+        (fns.v1_0.cmd_draw_indexed_indirect)(
             self.handle,
             inner.buffer.internal_object(),
             inner.offset,
